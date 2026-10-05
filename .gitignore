@@ -1,3 +1,4 @@
 *.zip
 *.csv
 Datasets/base_data.parquet
+*.parquet

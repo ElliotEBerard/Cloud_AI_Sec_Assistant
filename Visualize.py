@@ -2,7 +2,7 @@
 import pandas as pd
 import numpy as np
 
-def count_labels(parquet_path):
+'''def count_labels(parquet_path):
     df = pd.read_parquet(parquet_path, columns=['label'])
     counts = df['label'].value_counts()
     pct = df['label'].value_counts(normalize=True).round(4) * 100
@@ -85,4 +85,72 @@ def analyze_combined_columns(parquet_path, corr_threshold=0.9, dominant_threshol
         'high_corr_pairs': high_corr_pairs
     }
 
-results = analyze_combined_columns('./Datasets/base_data.parquet')
+#analyze_combined_columns('./Datasets/base_data.parquet')
+
+import pandas as pd
+
+def check_dst_ports(parquet_path):
+    df = pd.read_parquet(parquet_path, columns=['dst_port', 'label'])
+    
+    # Common well-known ports and their typical service
+    well_known_ports = {
+        20: 'FTP-DATA', 21: 'FTP', 22: 'SSH', 23: 'TELNET', 25: 'SMTP',
+        53: 'DNS', 67: 'DHCP', 68: 'DHCP', 69: 'TFTP', 80: 'HTTP',
+        110: 'POP3', 123: 'NTP', 137: 'NETBIOS', 138: 'NETBIOS', 139: 'NETBIOS',
+        143: 'IMAP', 161: 'SNMP', 389: 'LDAP', 443: 'HTTPS', 445: 'SMB',
+        465: 'SMTPS', 587: 'SMTP-SUB', 993: 'IMAPS', 995: 'POP3S',
+        1433: 'MSSQL', 1521: 'ORACLE', 3306: 'MYSQL', 3389: 'RDP',
+        5432: 'POSTGRESQL', 5900: 'VNC', 6379: 'REDIS', 8080: 'HTTP-ALT',
+        8443: 'HTTPS-ALT', 27017: 'MONGODB'
+    }
+    
+    unique_ports = sorted(df['dst_port'].unique())
+    print(f"Total unique dst_ports in file: {len(unique_ports)}\n")
+    
+    # Which well-known ports actually appear
+    found_well_known = {p: well_known_ports[p] for p in unique_ports if p in well_known_ports}
+    print("=" * 50)
+    print("WELL-KNOWN PORTS FOUND IN DATA")
+    print("=" * 50)
+    for port, service in sorted(found_well_known.items()):
+        count = (df['dst_port'] == port).sum()
+        pct = round(count / len(df) * 100, 3)
+        print(f"  Port {port} ({service}): {count} rows ({pct}%)")
+    
+    # Top 20 most frequent ports overall (well-known or not)
+    print("\n" + "=" * 50)
+    print("TOP 20 MOST FREQUENT DST_PORTS (any port)")
+    print("=" * 50)
+    top_ports = df['dst_port'].value_counts().head(20)
+    for port, count in top_ports.items():
+        service = well_known_ports.get(port, 'unknown/ephemeral')
+        pct = round(count / len(df) * 100, 3)
+        print(f"  Port {port} ({service}): {count} rows ({pct}%)")
+    
+    # Cross-tab: port usage by label, for context
+    print("\n" + "=" * 50)
+    print("DST_PORT BY LABEL (top 3 ports per label)")
+    print("=" * 50)
+    for label in df['label'].unique():
+        subset = df[df['label'] == label]
+        top3 = subset['dst_port'].value_counts().head(3)
+        print(f"\n{label}:")
+        for port, count in top3.items():
+            service = well_known_ports.get(port, 'unknown/ephemeral')
+            print(f"    Port {port} ({service}): {count}")
+    
+    return found_well_known, top_ports
+
+found, top = check_dst_ports('./Datasets/base_data_reduced.parquet')'''
+
+df = pd.read_parquet('./Datasets/base_data_enriched.parquet')
+cols = [c for c in ['fwd_packets_count', 'bwd_packets_count', 'fwd_total_payload_bytes',
+                    'bwd_total_payload_bytes', 'duration'] if c in df.columns]
+full = df[df['reply_stub'] == 0]
+
+print(full.groupby('label')['flow_reversed'].mean().round(3))
+print(full[full['label'] == 'Benign'].groupby('flow_reversed')[cols].median())
+print(full[full['label'].isin(['DoS_HULK', 'DoS_Golden_Eye', 'DDoS_LOIC_HTTP'])]
+      .groupby(['label', 'flow_reversed'])[cols].median())
+
+print(df[df['reply_stub'] == 0]['label'].value_counts())
