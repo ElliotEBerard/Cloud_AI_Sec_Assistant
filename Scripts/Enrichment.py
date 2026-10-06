@@ -1,12 +1,14 @@
+import os
 import sys
 import numpy as np
 import pandas as pd
 
 SEED = 42
-REDUCED_PATH = './Datasets/base_data_reduced.parquet'
-ENRICHED_PATH = './Datasets/base_data_enriched.parquet'
-ASSETS_PATH = './Datasets/assets.parquet'
-USERS_PATH = './Datasets/users.parquet'
+PARQUET_DIR = 'C:/parquets/'
+REDUCED_PATH = PARQUET_DIR + 'base_data_reduced.parquet'
+ENRICHED_PATH = PARQUET_DIR + 'base_data_enriched.parquet'
+ASSETS_PATH = PARQUET_DIR + 'assets.parquet'
+USERS_PATH = PARQUET_DIR + 'users.parquet'
 
 # DoS_SlowHTTP medians match Brute_Force_FTP and all its rows are on port 21, so the class is unusable
 DROP_LABELS = ['DoS_SlowHTTP']
@@ -50,7 +52,7 @@ LABEL_TARGET_TYPE = {
 N_TARGETS = 5
 
 REQUIRED_INPUT = ['timestamp', 'dst_port', 'src_port', 'handshake_duration',
-                  'fwd_packets_count', 'direction_swapped', 'label']
+                  'fwd_packets_count', 'bwd_packets_count', 'direction_swapped', 'label']
 
 # Columns that identify the label by construction or schedule. Keep them out of the classifier.
 # Use them for scoring, per-entity baselining and the hunting layer instead.
@@ -60,7 +62,7 @@ MODEL_EXCLUDE = [
     'asset_id', 'user_id', 'service_type', 'asset_criticality', 'user_role',
     'historical_alert_count', 'historical_alert_count_log',
     'mitre_technique', 'mitre_tactic',
-    'flow_reversed', 'reply_stub', 'direction_swapped',
+    'flow_reversed', 'reply_stub', 'single_packet', 'direction_swapped',
 ]
 
 
@@ -93,6 +95,13 @@ def add_port_category(df):
 def add_reply_stub(df):
     # One-packet replies from the service side (0 forward packets). Analysis flag, not a model input.
     df['reply_stub'] = (df['fwd_packets_count'] == 0).astype(int)
+    return df
+
+
+def add_single_packet(df):
+    # Flows with at most one packet in total (lone replies, lone forward packets, lone resets).
+    # Analysis flag for sliced reporting and for the Isolation Forest filter, not a model input.
+    df['single_packet'] = ((df['fwd_packets_count'] + df['bwd_packets_count']) <= 1).astype(int)
     return df
 
 
@@ -190,10 +199,12 @@ def enrich():
     df = add_time_and_handshake(df)
     df = add_port_category(df)
     df = add_reply_stub(df)
+    df = add_single_packet(df)
     df = add_mitre(df)
     df = add_assets_and_users(df, assets, users)
     df = add_historical_alert_count(df)
 
+    os.makedirs(PARQUET_DIR, exist_ok=True)
     df.to_parquet(ENRICHED_PATH, index=False)
     assets.to_parquet(ASSETS_PATH, index=False)
     users.to_parquet(USERS_PATH, index=False)
@@ -202,9 +213,9 @@ def enrich():
 
 def validate(df):
     new_cols = ['hour_of_day', 'day_of_week', 'handshake_complete', 'service_port', 'port_category',
-                'flow_reversed', 'reply_stub', 'direction_swapped', 'mitre_technique', 'mitre_tactic',
-                'asset_id', 'service_type', 'asset_criticality', 'user_id', 'user_role',
-                'historical_alert_count', 'historical_alert_count_log']
+                'flow_reversed', 'reply_stub', 'single_packet', 'direction_swapped',
+                'mitre_technique', 'mitre_tactic', 'asset_id', 'service_type', 'asset_criticality',
+                'user_id', 'user_role', 'historical_alert_count', 'historical_alert_count_log']
     missing = [c for c in new_cols if c not in df.columns]
     assert not missing, f'Missing columns: {missing}'
     nulls = df[new_cols].isna().sum()
@@ -221,10 +232,13 @@ def validate(df):
     print('\nShare of one-packet reply stubs, by label:')
     print(df.groupby('label')['reply_stub'].mean().round(3))
 
+    print('\nShare of single-packet flows (any direction), by label:')
+    print(df.groupby('label')['single_packet'].mean().round(3))
+
     print('\nShare of rows direction-normalized, by label:')
     print(df.groupby('label')['direction_swapped'].mean().round(3))
 
-    print('\nShare still flagged flow_reversed (should now track the stub share):')
+    print('\nShare still flagged flow_reversed (should track the stub share):')
     print(df.groupby('label')['flow_reversed'].mean().round(3))
 
     print('\nDistinct assets hit per label (about 5 for attacks):')
@@ -240,13 +254,15 @@ def validate(df):
     print(f'\nModel input features: {len(get_model_features(df))}')
     print('\nNon-stub rows available for supervised training:')
     print(df[df['reply_stub'] == 0]['label'].value_counts())
+    print('\nMulti-packet rows available for the Isolation Forest:')
+    print(df[(df['reply_stub'] == 0) & (df['single_packet'] == 0)]['label'].value_counts())
 
 
 def diagnose(df):
     cols = [c for c in ['fwd_packets_count', 'bwd_packets_count', 'fwd_total_payload_bytes',
                         'bwd_total_payload_bytes', 'duration'] if c in df.columns]
     full = df[df['reply_stub'] == 0]
-    print('\nPayload medians by direction_swapped (the groups should now agree):')
+    print('\nPayload medians by direction_swapped (the groups should agree):')
     for label in ['DoS_HULK', 'Benign']:
         if label in full['label'].values:
             print(label)

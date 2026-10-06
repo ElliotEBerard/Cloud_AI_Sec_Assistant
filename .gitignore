@@ -2,3 +2,6 @@
 *.csv
 Datasets/base_data.parquet
 *.parquet
+/export
+/Scripts/__pycache__
+/Models

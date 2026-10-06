@@ -141,7 +141,7 @@ def check_dst_ports(parquet_path):
     
     return found_well_known, top_ports
 
-found, top = check_dst_ports('./Datasets/base_data_reduced.parquet')'''
+found, top = check_dst_ports('./Datasets/base_data_reduced.parquet')
 
 df = pd.read_parquet('./Datasets/base_data_enriched.parquet')
 cols = [c for c in ['fwd_packets_count', 'bwd_packets_count', 'fwd_total_payload_bytes',
@@ -154,3 +154,73 @@ print(full[full['label'].isin(['DoS_HULK', 'DoS_Golden_Eye', 'DDoS_LOIC_HTTP'])]
       .groupby(['label', 'flow_reversed'])[cols].median())
 
 print(df[df['reply_stub'] == 0]['label'].value_counts())
+
+import numpy as np
+import pandas as pd
+from Enrichment import ENRICHED_PATH
+
+df = pd.read_parquet(ENRICHED_PATH)
+sl = df[(df['label'] == 'DoS_Slowloris') & (df['reply_stub'] == 0)].copy()
+sl['phase'] = np.where(sl['timestamp'] >= '2018-02-15 10:40:40', 'last_80s', 'earlier')
+cols = [c for c in ['duration', 'fwd_packets_count', 'bwd_packets_count', 'bytes_rate',
+                    'handshake_complete', 'rst_flag_counts', 'fin_flag_counts'] if c in sl.columns]
+print(sl.groupby('phase')[cols].median())
+print(sl['phase'].value_counts())
+
+import pandas as pd
+from Enrichment import ENRICHED_PATH
+
+df = pd.read_parquet(ENRICHED_PATH)
+total_pkts = df['fwd_packets_count'] + df['bwd_packets_count']
+df['single_packet'] = (total_pkts <= 1).astype(int)
+
+summary = pd.DataFrame({
+    'rows': df.groupby('label').size(),
+    'single_packet_share': df.groupby('label')['single_packet'].mean().round(3),
+    'stub_share': df.groupby('label')['reply_stub'].mean().round(3),
+})
+print(summary)
+print('\nSingle-packet, forward-only (not caught by reply_stub):')
+print(df[(df['single_packet'] == 1) & (df['reply_stub'] == 0)].groupby('label').size())
+
+import pandas as pd
+from Enrichment import ENRICHED_PATH
+
+df = pd.read_parquet(ENRICHED_PATH, columns=['label', 'src_ip', 'dst_ip'])
+for label, g in df[df['label'] != 'Benign'].groupby('label'):
+    print(label)
+    print('  top src:', g['src_ip'].value_counts().head(3).to_dict())
+    print('  top dst:', g['dst_ip'].value_counts().head(3).to_dict())
+b = df[df['label'] == 'Benign']
+print('\nBenign unique src_ip:', b['src_ip'].nunique(), '| unique dst_ip:', b['dst_ip'].nunique())
+
+
+df = pd.read_parquet(ENRICHED_PATH)
+sl = df[(df['label'] == 'DoS_Slowloris') & (df['reply_stub'] == 0)]
+tail = sl[sl['timestamp'] >= '2018-02-15 10:40:40']
+print(tail['single_packet'].value_counts())
+print(tail[tail['single_packet'] == 0][['fwd_packets_count', 'bwd_packets_count', 'duration']].describe())
+
+import pandas as pd
+df = pd.read_parquet('C:/parquets/scored_events.parquet')
+sl = df[(df['label'] == 'DoS_Slowloris') & (df['fold'] >= 0) & (df['pred_class'] != df['target'])]
+print(sl.groupby(['fold', 'evidence']).size())'''
+
+import pandas as pd
+
+enr = pd.read_parquet('C:/parquets/base_data_enriched.parquet')
+sc = pd.read_parquet('C:/parquets/scored_events.parquet')
+assert (enr['flow_id'].to_numpy() == sc['flow_id'].to_numpy()).all()
+
+sl = sc[(sc['label'] == 'DoS_Slowloris') & (sc['fold'] >= 0)].copy()
+sl['missed'] = sl['pred_class'] != sl['target']
+cols = [c for c in ['duration', 'fwd_packets_count', 'bwd_packets_count', 'bytes_rate',
+                    'handshake_complete', 'rst_flag_counts', 'fin_flag_counts'] if c in enr.columns]
+for c in cols:
+    sl[c] = enr.loc[sl.index, c].to_numpy()
+
+print(sl.groupby(['fold', 'missed']).size().unstack(fill_value=0))
+print(sl[sl['fold'].isin([0, 3]) & (sl['evidence'] == 'multi_packet')]
+        .groupby(['fold', 'missed'])[cols].median())
+print(sl[sl['missed']].groupby(['fold', 'pred_class']).size())
+print(sl.groupby('fold')['timestamp'].agg(['min', 'max']))
